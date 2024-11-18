@@ -10,10 +10,9 @@ dotenv.config();
 
 const app = express();
 
-// CORS configuration
 const allowedOrigins = [
-    process.env.LOCAL_ORIGIN,
-    process.env.PROD_ORIGIN,
+    'http://localhost:3000', // Local development
+    'https://your-frontend-domain.vercel.app', // Production frontend domain
 ];
 
 app.use(cors({
