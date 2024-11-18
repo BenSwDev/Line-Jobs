@@ -1,0 +1,997 @@
+
+the project's files:
+
+backend:
+// server.js
+
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const authRoutes = require('./routes/authRoutes');
+
+dotenv.config();
+
+const app = express();
+
+// CORS configuration
+const allowedOrigins = [
+    process.env.LOCAL_ORIGIN,
+    process.env.PROD_ORIGIN,
+];
+
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+}));
+
+// Middleware
+app.use(express.json());
+
+// Routes
+app.use('/api/auth', authRoutes);
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI)
+    .then(() => {
+        console.log('Connected to MongoDB Atlas');
+        // Start the server
+        const PORT = process.env.PORT || 5000;
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+        });
+    })
+    .catch((error) => {
+        console.error('Error connecting to MongoDB:', error.message);
+    });
+
+// src/routes/authRoutes.js
+
+const express = require('express');
+const { register, login, getMe } = require('../controllers/authController');
+const { protect } = require('../middleware/authMiddleware');
+
+console.log(register, login, getMe); // Debugging output
+
+const router = express.Router();
+
+router.post('/register', register);
+router.post('/login', login);
+router.get('/me', protect, getMe);
+
+module.exports = router;
+
+// src/model/User.js
+
+const mongoose = require('mongoose');
+
+const userSchema = new mongoose.Schema({
+    email: {
+        type: String,
+        required: [true, 'Please provide an email'],
+        unique: true,
+        lowercase: true,
+        match: [/\S+@\S+\.\S+/, 'Please provide a valid email'],
+    },
+    password: {
+        type: String,
+        required: [true, 'Please provide a password'],
+        minlength: [6, 'Password must be at least 6 characters long'],
+    },
+}, { timestamps: true });
+
+module.exports = mongoose.model('User', userSchema);
+
+// src/middleware/authMiddleware.js
+
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+
+const protect = async (req, res, next) => {
+    let token;
+
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        try {
+            token = req.headers.authorization.split(' ')[1];
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+            req.user = await User.findById(decoded.id).select('-password');
+            next();
+        } catch (error) {
+            res.status(401).json({ message: 'Not authorized' });
+        }
+    }
+
+    if (!token) {
+        res.status(401).json({ message: 'Not authorized, no token' });
+    }
+};
+
+module.exports = { protect };
+
+// src/controllers/authControllers.js
+
+const User = require('../models/User');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+// Helper function to generate JWT
+const generateToken = (id) => {
+    return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+};
+
+// @desc    Register new user
+// @route   POST /api/auth/register
+// @access  Public
+const register = async (req, res) => {
+    const { email, password } = req.body;
+
+    // Simple validation
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Please provide all fields' });
+    }
+
+    try {
+        // Check if user exists
+        const userExists = await User.findOne({ email });
+
+        if (userExists) {
+            return res.status(400).json({ message: 'User already exists' });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create user
+        const user = await User.create({
+            email,
+            password: hashedPassword,
+        });
+
+        if (user) {
+            res.status(201).json({
+                _id: user.id,
+                email: user.email,
+                token: generateToken(user._id),
+            });
+        } else {
+            res.status(400).json({ message: 'Invalid user data' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Authenticate a user
+// @route   POST /api/auth/login
+// @access  Public
+const login = async (req, res) => {
+    const { email, password } = req.body;
+
+    // Simple validation
+    if (!email || !password) {
+        return res.status(400).json({ message: 'Please provide all fields' });
+    }
+
+    try {
+        // Check for user
+        const user = await User.findOne({ email });
+
+        if (user && (await bcrypt.compare(password, user.password))) {
+            res.json({
+                _id: user.id,
+                email: user.email,
+                token: generateToken(user._id),
+            });
+        } else {
+            res.status(401).json({ message: 'Invalid credentials' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Get user data
+// @route   GET /api/auth/me
+// @access  Private
+const getMe = async (req, res) => {
+    const user = await User.findById(req.user.id).select('-password');
+    res.status(200).json(user);
+};
+
+module.exports = {
+    register,
+    login,
+    getMe,
+};
+
+
+the .env file:
+# Server Configuration
+PORT=5000
+
+# MongoDB Connection String
+MONGO_URI="mongodb+srv://benswissa:Leo2018Emma2020$$$@lines-jobs-users.r02fk.mongodb.net/?retryWrites=true&w=majority&appName=Lines-Jobs-Users"
+
+# JWT Secret Key
+JWT_SECRET="L29i07n92e$$$S"
+
+# CORS Configuration
+LOCAL_ORIGIN=http://localhost:3000
+PROD_ORIGIN=https://your-frontend-domain.vercel.app
+
+
+
+the package.json file:
+{
+  "name": "lines-jobs-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongodb": "^6.10.0",
+    "mongoose": "^8.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
+
+
+
+
+
+frontend:
+
+in public folder:
+manifest.json:
+{
+  "name": "Lines Jobs",
+  "short_name": "LinesJobs",
+  "description": "A Lines Jobs Application",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "theme_color": "#1976d2",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}
+
+
+in src folder:
+// app/dashboard/page.tsx
+
+'use client';
+
+import React, { useContext } from 'react';
+import { Container, Typography, Button, Box } from '@mui/material';
+import { AuthContext } from '../../context/AuthContext';
+import ProtectedRoute from '../../components/ProtectedRoute';
+
+const DashboardPage: React.FC = () => {
+  const { logout, user, loading } = useContext(AuthContext);
+
+  if (loading) {
+    return null; // Optionally, render a loader here
+  }
+
+  return (
+    <ProtectedRoute>
+      <Container maxWidth="sm">
+        <Box mt={5}>
+          <Typography variant="h4" gutterBottom>
+            Dashboard
+          </Typography>
+          <Typography variant="body1" gutterBottom>
+            Welcome, {user?.email}!
+          </Typography>
+          <Button variant="contained" color="secondary" onClick={logout}>
+            Logout
+          </Button>
+        </Box>
+      </Container>
+    </ProtectedRoute>
+  );
+};
+
+export default DashboardPage;
+
+// app/login/page.tsx
+
+'use client';
+
+import React, { useState, useContext } from 'react';
+import { TextField, Button, Container, Typography, Box, Alert } from '@mui/material';
+import { AuthContext } from '../../context/AuthContext';
+import Link from 'next/link';
+
+const LoginPage: React.FC = () => {
+  const { login } = useContext(AuthContext);
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await login(form.email, form.password);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Container maxWidth="sm">
+      <Box mt={5}>
+        <Typography variant="h4" gutterBottom>
+          Login
+        </Typography>
+        <form onSubmit={handleSubmit}>
+          <TextField
+            label="Email"
+            name="email"
+            type="email"
+            value={form.email}
+            onChange={handleChange}
+            fullWidth
+            margin="normal"
+            required
+          />
+          <TextField
+            label="Password"
+            name="password"
+            type="password"
+            value={form.password}
+            onChange={handleChange}
+            fullWidth
+            margin="normal"
+            required
+          />
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            fullWidth
+            sx={{ mt: 3 }}
+            disabled={loading}
+          >
+            {loading ? 'Logging in...' : 'Login'}
+          </Button>
+        </form>
+        <Typography variant="body2" align="center" sx={{ mt: 2 }}>
+          Don&#39;t have an account? <Link href="/register">Register</Link>
+        </Typography>
+      </Box>
+    </Container>
+  );
+};
+
+export default LoginPage;
+
+
+// app/register/page.tsx
+
+'use client';
+
+import React, { useState, useContext } from 'react';
+import { TextField, Button, Container, Typography, Box, Alert } from '@mui/material';
+import { AuthContext } from '../../context/AuthContext';
+import Link from 'next/link';
+
+const RegisterPage: React.FC = () => {
+  const { register } = useContext(AuthContext);
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await register(form.email, form.password);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Container maxWidth="sm">
+      <Box mt={5}>
+        <Typography variant="h4" gutterBottom>
+          Register
+        </Typography>
+        <form onSubmit={handleSubmit}>
+          <TextField
+            label="Email"
+            name="email"
+            type="email"
+            value={form.email}
+            onChange={handleChange}
+            fullWidth
+            margin="normal"
+            required
+          />
+          <TextField
+            label="Password"
+            name="password"
+            type="password"
+            value={form.password}
+            onChange={handleChange}
+            fullWidth
+            margin="normal"
+            required
+          />
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            fullWidth
+            sx={{ mt: 3 }}
+            disabled={loading}
+          >
+            {loading ? 'Registering...' : 'Register'}
+          </Button>
+        </form>
+        <Typography variant="body2" align="center" sx={{ mt: 2 }}>
+          Already have an account? <Link href="/login">Login</Link>
+        </Typography>
+      </Box>
+    </Container>
+  );
+};
+
+export default RegisterPage;
+
+/* app/global.css */
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+}
+
+
+// app/layout.tsx
+'use client';
+
+import React from 'react';
+import { AuthProvider } from '../context/AuthContext';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
+import Head from 'next/head';
+import Navbar from '../components/Navbar';
+
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#1976d2',
+    },
+  },
+});
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <Head>
+        <link rel="manifest" href="/manifest.json" />
+        <link rel="icon" href="/icons/icon-192x192.png" />
+        <meta name="theme-color" content="#1976d2" />
+      </Head>
+      <body>
+        <AuthProvider>
+          <ThemeProvider theme={theme}>
+            <CssBaseline />
+            <Navbar />
+            {children}
+          </ThemeProvider>
+        </AuthProvider>
+      </body>
+    </html>
+  );
+}
+
+// app/page.tsx
+'use client';
+
+import React from 'react';
+import { Container, Typography, Box } from '@mui/material';
+
+const HomePage: React.FC = () => {
+  return (
+    <Container maxWidth="md">
+      <Box mt={5} textAlign="center">
+        <Typography variant="h3" gutterBottom>
+          Welcome to LinesJobs
+        </Typography>
+        <Typography variant="h6" color="textSecondary">
+          Your platform to find the best jobs tailored for you.
+        </Typography>
+      </Box>
+    </Container>
+  );
+};
+
+export default HomePage;
+
+// app/theme.ts
+import { createTheme } from '@mui/material/styles';
+
+const theme = createTheme({
+  palette: {
+    primary: {
+      main: '#1976d2', // Blue
+    },
+    secondary: {
+      main: '#f50057', // Pink
+    },
+  },
+  typography: {
+    fontFamily: 'Roboto, Arial, sans-serif',
+  },
+});
+
+export default theme;
+
+// components/Navbar.tsx
+'use client';
+
+import React, { useContext } from 'react';
+import { AppBar, Toolbar, Typography, Button } from '@mui/material';
+import Link from 'next/link';
+import { AuthContext } from '../context/AuthContext';
+
+const Navbar: React.FC = () => {
+  const { user, logout } = useContext(AuthContext);
+
+  return (
+    <AppBar position="static">
+      <Toolbar>
+        <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+          <Link href="/" style={{ color: 'inherit', textDecoration: 'none' }}>
+            LinesJobs
+          </Link>
+        </Typography>
+        {user ? (
+          <>
+            <Button color="inherit" component={Link} href="/dashboard">
+              Dashboard
+            </Button>
+            <Button color="inherit" onClick={logout}>
+              Logout
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button color="inherit" component={Link} href="/login">
+              Login
+            </Button>
+            <Button color="inherit" component={Link} href="/register">
+              Register
+            </Button>
+          </>
+        )}
+      </Toolbar>
+    </AppBar>
+  );
+};
+
+export default Navbar;
+
+// components/ProtectedRoute.tsx
+
+'use client';
+
+import React, { useContext, useEffect } from 'react';
+import { AuthContext } from '../context/AuthContext';
+import { useRouter } from 'next/navigation';
+import { CircularProgress, Box } from '@mui/material';
+
+const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, loading } = useContext(AuthContext);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login');
+    }
+  }, [user, loading, router]);
+
+  if (loading) {
+    return (
+      <Box display="flex" justifyContent="center" alignItems="center" height="100vh">
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  return <>{children}</>;
+};
+
+export default ProtectedRoute;
+// src/context/AuthContext.tsx
+
+'use client';
+
+import React, { createContext, useState, useEffect, ReactNode } from 'react';
+import axios from '../utils/axios';
+import jwtDecode from 'jwt-decode';
+import { useRouter } from 'next/navigation';
+
+interface User {
+  _id: string;
+  email: string;
+}
+
+interface DecodedToken {
+  id: string;
+  exp: number;
+}
+
+interface AuthResponse {
+  token: string;
+  _id: string;
+  email: string;
+}
+
+interface AuthContextProps {
+  user: User | null;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  loading: boolean; // Added loading state
+}
+
+export const AuthContext = createContext<AuthContextProps>({
+  user: null,
+  login: async () => {},
+  register: async () => {},
+  logout: () => {},
+  loading: true, // Initialize as loading
+});
+
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState<boolean>(true); // Manage loading state
+  const router = useRouter();
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const decoded: DecodedToken = jwtDecode(token);
+          if (decoded.exp * 1000 < Date.now()) {
+            logout();
+          } else {
+            // Set axios default headers
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            // Fetch user data from backend
+            const res = await axios.get<User>('/auth/me');
+            setUser(res.data);
+          }
+        } catch (error) {
+          console.error('Invalid token or error fetching user:', error);
+          logout();
+        }
+      }
+      setLoading(false);
+    };
+
+    fetchUser();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const login = async (email: string, password: string) => {
+    try {
+      const res = await axios.post<AuthResponse>('/auth/login', { email, password });
+      localStorage.setItem('token', res.data.token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
+      setUser({ _id: res.data._id, email: res.data.email });
+      router.push('/dashboard');
+    } catch (error: any) {
+      throw new Error(error.response?.data?.message || 'Login failed');
+    }
+  };
+
+  const register = async (email: string, password: string) => {
+    try {
+      const res = await axios.post<AuthResponse>('/auth/register', { email, password });
+      localStorage.setItem('token', res.data.token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
+      setUser({ _id: res.data._id, email: res.data.email });
+      router.push('/dashboard');
+    } catch (error: any) {
+      throw new Error(error.response?.data?.message || 'Registration failed');
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    setUser(null);
+    delete axios.defaults.headers.common['Authorization'];
+    router.push('/login');
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+
+// utils/axios.ts
+import axios from 'axios';
+
+const instance = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Request interceptor to attach token
+instance.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token && config.headers) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+export default instance;
+
+
+
+files outside src:
+
+.env.local file:
+# Server Configuration
+NEXT_PUBLIC_PORT=3000
+
+# Backend API Base URL
+NEXT_PUBLIC_API_URL=http://localhost:5000/api
+
+# JWT Secret Key (if needed on frontend, but usually kept on backend)
+# JWT_SECRET=YourJWTSecretKeyHere
+
+# CORS Configuration
+# LOCAL_ORIGIN=http://localhost:3000
+# PROD_ORIGIN=https://your-frontend-domain.vercel.app
+
+
+gitignore:
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+
+
+
+next.config.ts:
+// next.config.ts
+import type { NextConfig } from 'next';
+const withPWA = require('next-pwa')({
+  dest: 'public',
+  register: true,
+  skipWaiting: true,
+  disable: process.env.NODE_ENV === 'development',
+});
+
+const nextConfig: NextConfig = {
+  reactStrictMode: true,
+  swcMinify: true, // Ensure this is correctly placed
+  // Add any other Next.js config options here
+  // Example: images: { domains: ['example.com'] },
+};
+
+export default withPWA(nextConfig);
+
+
+package.json:
+{
+  "name": "lines-jobs-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@mui/icons-material": "^6.1.7",
+    "@mui/material": "^6.1.7",
+    "axios": "^1.7.7",
+    "jwt-decode": "^3.1.2",
+    "next": "15.0.3",
+    "next-pwa": "^5.6.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/jwt-decode": "^2.2.1",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "typescript": "^5"
+  }
+}
+
+
+tsconfig.json:
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
